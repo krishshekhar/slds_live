@@ -403,7 +403,15 @@ class StickyHDPSLDS:
             ll += _log_gaussian(x[t] - mean, self.Q[z[t]])
         return float(ll)
 
-    def gibbs(self, y: ArrayLike, n_iters: int = 300, burn_in: int = 100) -> dict:
+    def gibbs(
+        self,
+        y: ArrayLike,
+        n_iters: int = 300,
+        burn_in: int = 100,
+        *,
+        z_init: np.ndarray | None = None,
+        x_init: np.ndarray | None = None,
+    ) -> dict:
         y = np.asarray(y, dtype=float)
         if y.ndim == 1:
             y = y[:, None]
@@ -411,8 +419,21 @@ class StickyHDPSLDS:
             raise ValueError("obs_dim does not match data dimension.")
 
         T = y.shape[0]
-        z = self.rng.integers(0, self.L, size=T)
-        x = self.rng.normal(size=(T, self.state_dim))
+        if z_init is not None or x_init is not None:
+            if z_init is None or x_init is None:
+                raise ValueError("Provide both z_init and x_init, or neither.")
+            z = np.asarray(z_init, dtype=int).copy()
+            x = np.asarray(x_init, dtype=float).copy()
+            if z.shape != (T,):
+                raise ValueError(f"z_init must have shape ({T},), got {z.shape}.")
+            if x.shape != (T, self.state_dim):
+                raise ValueError(
+                    f"x_init must have shape ({T}, {self.state_dim}), got {x.shape}."
+                )
+            z = np.clip(z, 0, self.L - 1)
+        else:
+            z = self.rng.integers(0, self.L, size=T)
+            x = self.rng.normal(size=(T, self.state_dim))
         history: dict[str, list] = {
             "num_active": [],
             "loglik": [],

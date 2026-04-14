@@ -160,7 +160,14 @@ class StickyHDPARHMM:
             self.Sigma[k] = invwishart.rvs(df=nun, scale=Sn)
             self.B[k] = self._sample_matrix_normal(Mn, Vn, self.Sigma[k])
 
-    def gibbs(self, y: ArrayLike, n_iters: int = 500, burn_in: int = 100) -> dict:
+    def gibbs(
+        self,
+        y: ArrayLike,
+        n_iters: int = 500,
+        burn_in: int = 100,
+        *,
+        z_init: np.ndarray | None = None,
+    ) -> dict:
         """
         Run blocked Gibbs sampling for sticky HDP-AR-HMM.
         """
@@ -171,7 +178,13 @@ class StickyHDPARHMM:
         if T <= self.ar_order:
             raise ValueError("Time series too short for specified ar_order.")
 
-        z = self.rng.integers(0, self.L, size=T)
+        if z_init is not None:
+            z = np.asarray(z_init, dtype=int).copy()
+            if z.shape != (T,):
+                raise ValueError(f"z_init must have shape ({T},), got {z.shape}.")
+            z = np.clip(z, 0, self.L - 1)
+        else:
+            z = self.rng.integers(0, self.L, size=T)
         history: dict[str, list] = {"loglik": [], "num_active": [], "z_samples": []}
 
         for it in range(n_iters):
