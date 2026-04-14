@@ -1,0 +1,291 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath, amssymb, amsthm}
+\usepackage{graphicx}
+\usepackage{natbib}
+\usepackage{hyperref}
+
+\title{Bayesian Learning of Switching Linear Dynamical Systems\\
+  \large Statistical Foundations of AI/ML Project}
+\author{Krish}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Many real-world time series exhibit regime changes, where the underlying
+generative dynamics switch among a set of simpler modes. Classical models
+such as hidden Markov models (HMMs) and linear dynamical systems (LDSs)
+capture either discrete or continuous structure, but not both. In this
+project I study switching linear dynamical systems (SLDS) and closely
+related switching vector autoregressive (AR) processes, with an emphasis
+on Bayesian modeling and inference. Building on the work of
+\citet{fox2008} and \citet{linderman2017}, I implemented and empirically
+compared three families of models: finite switching AR models,
+nonparametric sticky HDP-AR-HMMs, and recurrent AR-HMMs with
+state-dependent transitions. Experiments on synthetic and real time
+series highlight when nonparametric priors help discover the number of
+regimes and when recurrent, state-dependent transitions are necessary to
+capture non-geometric dwell-time structure.
+\end{abstract}
+
+\section{Introduction}
+
+Complex temporal phenomena in science and engineering often display
+structured, recurring modes of behaviour. Examples range from financial
+markets alternating between low- and high-volatility regimes to animals
+switching between stereotyped motion patterns. A key challenge for
+statistical modeling is to represent both the continuous evolution
+within modes and the discrete switches between modes.
+
+Linear dynamical systems (LDSs) provide a tractable, Gaussian model for
+continuous-valued time series, while hidden Markov models (HMMs) capture
+discrete regime switching with geometric state durations. A natural
+hybrid is the switching linear dynamical system (SLDS), in which a
+latent Markov chain selects among a library of linear-Gaussian dynamical
+systems. Closely related are switching vector autoregressive models,
+which can be viewed as SLDSs where the latent continuous state is fully
+observed. These models have been widely used in control, econometrics
+and computer vision.
+
+However, several limitations motivate a more Bayesian perspective.
+First, standard SLDS formulations fix the number of modes \emph{a
+priori}, and miss the opportunity to let the data inform model
+complexity. Second, Markovian switching implies geometric state
+durations, which can be unrealistic in applications with long, structured
+episodes. Third, classical maximum-likelihood training does not quantify
+uncertainty over parameters and latent segmentations.
+
+In this project I explore Bayesian solutions to these issues, focusing on
+two influential lines of work:
+\begin{itemize}
+  \item \textbf{Nonparametric Bayesian SLDS/AR-HMM} of \citet{fox2008},
+    which use hierarchical Dirichlet processes (HDPs) and a ``sticky''
+    prior to infer an unknown number of persistent dynamical modes.
+  \item \textbf{Recurrent SLDS (rSLDS)} of \citet{linderman2017}, which
+    allow transition probabilities to depend on the continuous latent
+    state via a logistic stick-breaking regression, enabling
+    state-dependent, non-geometric dwell times.
+\end{itemize}
+
+My contributions are purely algorithmic and empirical: I implemented
+finite switching AR models, a sticky HDP-AR-HMM with weak-limit
+truncation, and an approximate recurrent AR-HMM using multinomial
+logistic regression, and compared them on synthetic and real data.
+
+\section{Background}
+
+\subsection{HMMs, LDSs and SLDSs}
+
+An HMM consists of a discrete Markov chain $(z_t)_{t=1}^T$ with
+transition matrix $\Pi = (\pi_{ij})$ and initial distribution $\pi_0$,
+and observations $y_t$ drawn conditionally independently given $z_t$,
+e.g.\ $y_t \mid z_t = k \sim \mathcal{N}(\mu_k, \Sigma_k)$. The Markov
+assumption yields geometric state durations.
+
+An LDS (state-space model) posits a continuous latent state $x_t \in
+\mathbb{R}^n$ evolving linearly with Gaussian noise,
+\[
+  x_t = A x_{t-1} + e_t, \quad e_t \sim \mathcal{N}(0, \Sigma),
+  \qquad
+  y_t = C x_t + w_t, \quad w_t \sim \mathcal{N}(0, R).
+\]
+Inference is tractable via Kalman filtering and smoothing.
+
+A switching LDS combines these ideas: a discrete Markov chain $z_t$
+selects among a set of linear dynamics and/or observation models
+indexed by $k = 1,\dots,K$,
+\[
+  x_t = A^{(z_t)} x_{t-1} + e_t^{(z_t)},
+  \qquad
+  y_t = C^{(z_t)} x_t + w_t^{(z_t)}.
+\]
+In this project I mainly work with the equivalent switching VAR(1)
+representation where the state is taken to be the observation itself,
+leading to an autoregressive HMM (AR-HMM)
+\citep{fox2008}. For each mode $k$,
+\[
+  y_t = A^{(k)} y_{t-1} + e_t^{(k)}, \quad e_t^{(k)} \sim
+  \mathcal{N}(0, \Sigma^{(k)}).
+\]
+
+\subsection{Dirichlet processes and the sticky HDP-HMM}
+
+The Dirichlet process (DP) $\mathrm{DP}(\gamma, H)$ is a distribution
+over discrete probability measures $G$ on a parameter space $\Theta$,
+often constructed via stick-breaking:
+\[
+  \beta_k' \sim \mathrm{Beta}(1,\gamma),\quad
+  \beta_k = \beta_k' \prod_{\ell<k} (1 - \beta_\ell'),\quad
+  \theta_k \sim H, \quad
+  G = \sum_{k=1}^\infty \beta_k \delta_{\theta_k}.
+\]
+The hierarchical Dirichlet process (HDP) extends this to multiple
+groups, yielding the HDP-HMM when group-specific measures index
+rows of an HMM transition matrix \citep{teh2006, beal2002}.
+
+While the HDP-HMM allows an unbounded number of HMM states, it can
+over-fragment time series data by rapidly switching among redundant
+states. \citet{fox2008} proposed the sticky HDP-HMM, which adds a
+``stickiness'' parameter $\kappa > 0$ that increases the prior
+probability of self-transitions. In the weak-limit finite
+approximation, with truncation level $L$, this leads to
+\[
+  \beta \sim \mathrm{Dir}\Big(\tfrac{\gamma}{L},\dots,\tfrac{\gamma}{L}\Big),
+  \quad
+  \pi_j \sim \mathrm{Dir}(\alpha \beta + \kappa \delta_j),
+\]
+where $\delta_j$ is a point mass on the $j$-th component.
+
+\subsection{Recurrent SLDS and state-dependent transitions}
+
+Standard SLDS and HDP-HMM models assume that transition probabilities
+depend only on the previous discrete state $z_{t-1}$. As a result,
+state durations are geometric. In many dynamical systems, however, the
+probability of switching regimes depends strongly on the continuous
+state $x_t$ or observed data $y_t$. For example, a dynamical system may
+switch when it reaches a particular region of state space.
+
+\citet{linderman2017} introduced a recurrent SLDS (rSLDS) in which the
+transition probabilities are governed by a logistic stick-breaking
+regression on the continuous state, enabling rich, state-dependent
+switching while maintaining tractable Bayesian inference via P{\'o}lya
+gamma augmentation. In this project I approximate this idea at the
+level of an AR-HMM by using multinomial logistic regression to model
+$p(z_{t+1}\mid z_t, y_t)$.
+
+\section{Models and Inference}
+
+Due to space, I summarize the implemented models and defer derivations
+to the source code and lecture notes.
+
+\subsection{Finite switching AR(1) model}
+
+The finite model assumes a fixed number $K$ of modes with Markov
+transitions. I implemented both an EM-style maximum-likelihood version
+and a Bayesian version with simple conjugate updates for $A^{(k)}$ and
+$\Sigma^{(k)}$. Inference over the latent sequence $z_{1:T}$ uses the
+forward--backward algorithm and forward-filter backward-sample.
+
+\subsection{Sticky HDP-AR-HMM}
+
+The sticky HDP-AR-HMM follows \citet{fox2008} and augments each mode
+with a VAR(1) parameter pair $(A^{(k)}, \Sigma^{(k)})$. I use the
+weak-limit truncation at level $L$ and a blocked Gibbs sampler that
+alternates between sampling the mode sequence $z_{1:T}$, the
+transition distributions $\pi_j$, the global weights $\beta$, and the
+AR parameters for each mode. This yields a nonparametric prior over the
+number of occupied modes.
+
+\subsection{Recurrent AR-HMM}
+
+To approximate recurrent SLDS behavior without implementing full
+P{\'o}lya--gamma augmentation, I model state-dependent transitions via
+a multinomial logistic regression classifier mapping features
+$(z_t, y_t)$ to $z_{t+1}$. I then alternate between approximate
+forward--backward inference using the current transition model,
+updating AR dynamics, and refitting the logistic regression on sampled
+state sequences. While not fully Bayesian, this captures the key
+qualitative behavior of state-dependent, non-geometric switching.
+
+\section{Experiments}
+
+\subsection{Synthetic Markov-switching AR(1)}
+
+I first generated synthetic data from a $K=3$ Markov-switching AR(1)
+model with stable dynamics and high self-transition probability
+($0.9$). I then fit:
+\begin{enumerate}
+  \item an EM-style finite AR-HMM with $K=3$,
+  \item a Bayesian switching AR(1) model with Gibbs sampling, and
+  \item a sticky HDP-AR-HMM with truncation $L=6$.
+\end{enumerate}
+
+Performance was evaluated using Hamming distance between the true and
+inferred state sequences (optimized over label permutations) and
+summary statistics of state run-lengths. Both finite models recovered
+the correct segmentation well. The HDP-AR-HMM typically used close to
+three effective modes, occasionally splitting a true mode into two when
+the data supported subtle dynamical differences, illustrating the
+flexibility of the nonparametric prior.
+
+\subsection{Synthetic state-dependent switching on an oval track}
+
+Next, I considered a simplified analogue of the NASCAR-style example
+in \citet{linderman2017}, generating a 2D trajectory along an oval
+``track'' with four position-dependent modes. The true next mode is
+almost deterministic given the current position, producing highly
+structured, non-geometric dwell times.
+
+I compared a Markov AR-HMM baseline to the recurrent AR-HMM. The
+Markov model captured local dynamics within modes but produced
+geometric-like dwell times and sometimes switched in the wrong regions.
+In contrast, the recurrent model learned position-dependent transition
+boundaries and generated trajectories with much more realistic periodic
+structure and dwell-time statistics similar to the ground truth.
+
+\subsection{Real-data example: stock index volatility regimes}
+
+Finally, I applied the finite AR-HMM and sticky HDP-AR-HMM to daily log
+returns of a stock index. Both models revealed interpretable
+low-, medium- and high-volatility regimes. The sticky HDP-AR-HMM
+showed more persistent regimes and occasionally split volatile periods
+into sub-regimes with different autocorrelation structure. Run-length
+statistics suggested that the nonparametric model better captured the
+heavy-tailed nature of volatility episode durations, consistent with
+the motivation for sticky HDP priors.
+
+\section{Discussion and Conclusion}
+
+This project explored Bayesian modeling of regime-switching time series,
+highlighting three ideas: (i) switching AR(1) models as a simple and
+practical alternative to full SLDSs, (ii) hierarchical Dirichlet
+process priors and the sticky HDP-HMM for inferring the number of
+persistent dynamical modes, and (iii) recurrent, state-dependent
+transition models inspired by rSLDS. Synthetic experiments confirmed
+known advantages of HDP-based models in controlling over-segmentation
+and of recurrent models in capturing non-geometric dwell times. The
+real-data results, while preliminary, demonstrated that these models
+can discover meaningful volatility regimes in financial time series.
+
+From a statistical foundations perspective, the project connected
+Dirichlet processes, conjugate priors for linear Gaussian models,
+blocked Gibbs sampling, and logistic regression-based transition
+models. Future work could replace the approximate recurrent AR-HMM
+with a fully Bayesian rSLDS using P{\'o}lya--gamma augmentation as in
+\citet{linderman2017}, and apply the models to higher-dimensional
+neural or motion capture datasets.
+
+\bibliographystyle{plainnat}
+\begin{thebibliography}{9}
+
+\bibitem[Beal et~al.(2002)Beal, Ghahramani, and Rasmussen]{beal2002}
+M.~J. Beal, Z.~Ghahramani, and C.~E. Rasmussen.
+\newblock The infinite hidden {M}arkov model.
+\newblock In \emph{Advances in Neural Information Processing Systems}, 2002.
+
+\bibitem[Fox et~al.(2008)Fox, Sudderth, Jordan, and Willsky]{fox2008}
+E.~B. Fox, E.~B. Sudderth, M.~I. Jordan, and A.~S. Willsky.
+\newblock Nonparametric {B}ayesian learning of switching linear dynamical
+  systems.
+\newblock In \emph{Advances in Neural Information Processing Systems}, 2008.
+
+\bibitem[Linderman et~al.(2017)Linderman, Johnson, Miller, Adams, Blei, and
+  Paninski]{linderman2017}
+S.~W. Linderman, M.~J. Johnson, A.~C. Miller, R.~P. Adams, D.~M. Blei, and
+  L.~Paninski.
+\newblock {B}ayesian learning and inference in recurrent switching linear
+  dynamical systems.
+\newblock In \emph{Proceedings of AISTATS}, 2017.
+
+\bibitem[Teh et~al.(2006)Teh, Jordan, Beal, and Blei]{teh2006}
+Y.~W. Teh, M.~I. Jordan, M.~J. Beal, and D.~M. Blei.
+\newblock Hierarchical {D}irichlet processes.
+\newblock \emph{Journal of the American Statistical Association},
+  101\penalty0 (476):\penalty0 1566--1581, 2006.
+
+\end{thebibliography}
+
+\end{document}
+

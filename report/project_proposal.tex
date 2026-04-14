@@ -1,0 +1,89 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage{hyperref}
+
+\title{Project Proposal: Bayesian Switching Linear Dynamical Systems\\
+\large Regime-Aware Modeling for Financial Time Series}
+\author{Course: AI61004 \quad \texttt{GROUP 10}}
+
+\begin{document}
+\maketitle
+
+\section*{Group Members}
+\begin{table}[h!]
+\centering
+\begin{tabular}{p{8cm} p{4cm}}
+\toprule
+\textbf{Name} & \textbf{Roll Number} \\
+\midrule
+Harshwardhan Walunjkar & 23MA10077 \\
+Krish Shekhar & 23MA10029 \\
+Nishad Gaikwad & 23MA10038 \\
+Prithviraj Solanke & 23IE10048 \\
+Siddharth Nema & 23MA10078 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Objective}
+The objective of this project is to develop a Bayesian regime-switching framework for financial time series that can:
+\begin{itemize}[leftmargin=1.5em]
+    \item infer latent market regimes (e.g., calm, stressed, crisis),
+    \item model within-regime dynamics using linear state-space components,
+    \item capture regime persistence and state-dependent switching behavior,
+    \item provide actionable outputs for risk monitoring and strategy design.
+\end{itemize}
+The project is motivated by the need for models that are both probabilistically principled and practically useful in quantitative finance.
+
+\section{Problem Formulation}
+Given observations $y_{1:T}$ (returns and market covariates), we assume a latent discrete state sequence $z_{1:T}$ and a latent continuous state sequence $x_{1:T}$:
+\begin{align}
+z_t \mid z_{t-1} &\sim \pi_{z_{t-1}},\\
+x_t &= A^{(z_t)}x_{t-1} + e_t^{(z_t)}, \quad e_t^{(z_t)} \sim \mathcal{N}(0,Q^{(z_t)}),\\
+y_t &= Cx_t + w_t, \quad w_t \sim \mathcal{N}(0,R).
+\end{align}
+
+To avoid fixing the number of regimes, we use a sticky HDP prior:
+\begin{align}
+\beta &\sim \mathrm{Dir}\!\left(\tfrac{\gamma}{L},\dots,\tfrac{\gamma}{L}\right),\\
+\pi_j &\sim \mathrm{Dir}(\alpha\beta + \kappa \delta_j),
+\end{align}
+where $\kappa$ encourages persistent states.
+
+To model non-geometric, state-dependent switches, we additionally use recurrent transitions:
+\begin{align}
+z_{t+1}\mid z_t,x_t \sim \pi_{\mathrm{SB}}(R_{z_t}x_t + r_{z_t}),
+\end{align}
+with stick-breaking logistic probabilities and P{\'o}lya--Gamma augmentation for Bayesian inference.
+
+\section{Planned Models}
+\begin{enumerate}[leftmargin=1.5em]
+    \item \textbf{Sticky HDP-AR-HMM} (switching autoregressive model with nonparametric regime count).
+    \item \textbf{Sticky HDP-SLDS} (full switching linear dynamical system with latent continuous states).
+    \item \textbf{Recurrent switching model} with state-dependent transitions (rSLDS/rAR-HMM formulation).
+\end{enumerate}
+The three models will be compared under a common real-data evaluation protocol.
+
+\section{Data Requirements and Preparation}
+\begin{itemize}[leftmargin=1.5em]
+    \item Primary series: broad equity index returns (e.g., S\&P 500 / NIFTY 50).
+    \item Optional covariates: VIX changes, yield-curve spread, credit spread, volume/liquidity proxies.
+    \item Frequency: daily; history target: at least 10--20 years where available.
+\end{itemize}
+
+
+
+\section*{References}
+\begin{enumerate}[leftmargin=1.5em]
+    \item Fox, E. B., Sudderth, E. B., Jordan, M. I., \& Willsky, A. S. (2008). \emph{Nonparametric Bayesian Learning of Switching Linear Dynamical Systems}. NeurIPS.
+    \item Linderman, S. W., Johnson, M. J., Miller, A. C., Adams, R. P., Blei, D. M., \& Paninski, L. (2017). \emph{Bayesian Learning and Inference in Recurrent Switching Linear Dynamical Systems}. AISTATS.
+    \item Linderman, S. W. et al. (2017). \emph{Supplementary Material: Bayesian Learning and Inference in Recurrent Switching Linear Dynamical Systems}.
+    \item Teh, Y. W., Jordan, M. I., Beal, M. J., \& Blei, D. M. (2006). \emph{Hierarchical Dirichlet Processes}. JASA.
+\end{enumerate}
+
+\end{document}
+
