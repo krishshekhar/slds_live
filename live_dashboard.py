@@ -15,9 +15,11 @@ import html
 import json
 import math
 import os
+import re
 import urllib.error
 import urllib.request
 from typing import Any, Iterable
+from urllib.parse import urlsplit, urlunsplit
 
 import altair as alt
 import pandas as pd
@@ -82,6 +84,39 @@ def _load_events_from_path(path: str) -> tuple[pd.DataFrame, dict[str, Any] | No
     return _dataframe_from_event_rows(rows), last_window
 
 
+def _normalize_events_url(url: str) -> str:
+    """
+    Clean secrets/paste issues and map GitHub *file* pages to raw.githubusercontent.com.
+    """
+    u = url.strip()
+    if len(u) >= 2 and u[0] == u[-1] and u[0] in "\"'":
+        u = u[1:-1].strip()
+    parsed = urlsplit(u)
+    u = urlunsplit((parsed.scheme, parsed.netloc, parsed.path, parsed.query, ""))
+
+    # https://github.com/{owner}/{repo}/blob/{ref}/{path}
+    m = re.match(
+        r"^https?://(?:www\.)?github\.com/([^/]+)/([^/]+)/blob/([^/]+)/(.+)$",
+        u,
+        re.I,
+    )
+    if m:
+        owner, repo, ref, path = m.groups()
+        return f"https://raw.githubusercontent.com/{owner}/{repo}/{ref}/{path}"
+
+    # https://github.com/{owner}/{repo}/raw/{ref}/{path} (GitHub UI "Raw" sometimes)
+    m2 = re.match(
+        r"^https?://(?:www\.)?github\.com/([^/]+)/([^/]+)/raw/([^/]+)/(.+)$",
+        u,
+        re.I,
+    )
+    if m2:
+        owner, repo, ref, path = m2.groups()
+        return f"https://raw.githubusercontent.com/{owner}/{repo}/{ref}/{path}"
+
+    return u
+
+
 def _load_events_from_url(
     url: str, *, timeout: int = 45
 ) -> tuple[pd.DataFrame, dict[str, Any] | None, str | None]:
@@ -89,16 +124,39 @@ def _load_events_from_url(
     Returns (dataframe, last_window_object, fetch_error).
     fetch_error is set when the HTTP request fails (not when the body is empty JSONL).
     """
+    url = _normalize_events_url(url)
+    if "..." in url:
+        return (
+            pd.DataFrame(),
+            None,
+            "URL still contains '...' — replace with your real GitHub username, repo name, branch, and file path.",
+        )
+    if not url.lower().startswith(("http://", "https://")):
+        return pd.DataFrame(), None, "URL must start with https://"
+
     req = urllib.request.Request(
         url,
-        headers={"User-Agent": "slds-live-dashboard/1.0"},
+        headers={
+            "User-Agent": (
+                "Mozilla/5.0 (compatible; SLDS-Live-Dashboard/1.0; "
+                "+https://github.com/krishshekhar/slds_live)"
+            ),
+            "Accept": "text/plain,text/*,*/*;q=0.01",
+        },
         method="GET",
     )
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             body = resp.read().decode("utf-8", errors="replace")
     except urllib.error.HTTPError as e:
-        return pd.DataFrame(), None, f"HTTP {e.code}: {e.reason}"
+        hint = ""
+        if e.code in (400, 404):
+            hint = (
+                " Check the path and branch name on raw.githubusercontent.com "
+                "(open the same URL in a private browser tab). "
+                "Use the **Raw** file link, not the repo browser page, unless it was auto-converted."
+            )
+        return pd.DataFrame(), None, f"HTTP {e.code}: {e.reason}.{hint}"
     except urllib.error.URLError as e:
         return pd.DataFrame(), None, str(e.reason if hasattr(e, "reason") else e)
     except (OSError, ValueError) as e:
@@ -284,9 +342,10 @@ setTimeout(function() {{
     events_url = _resolve_events_url(args.events_url)
     url_fetch_error: str | None = None
     if events_url:
+        fetch_url = _normalize_events_url(events_url)
         df, raw_last, url_fetch_error = _load_events_from_url(events_url)
         st.write("Events source: **remote URL** (refreshed each time this page reloads).")
-        st.caption(f"URL: `{events_url}`")
+        st.caption(f"Fetch URL: `{fetch_url}`")
     else:
         df, raw_last = _load_events_from_path(args.events_file)
         st.write(f"Events source: **local file** `{args.events_file}`")
