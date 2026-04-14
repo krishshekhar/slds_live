@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 """
 Streamlit dashboard for monitoring live trading activity.
+
+Local: reads ``results/live_trading/live_events.jsonl`` (or ``--events-file``).
+
+Streamlit Community Cloud: set ``EVENTS_URL`` in **Settings → Secrets** to an https URL
+that returns the same JSONL text (cloud cannot read your Mac filesystem).
 """
 
 from __future__ import annotations
@@ -10,7 +15,9 @@ import html
 import json
 import math
 import os
-from typing import Any
+import urllib.error
+import urllib.request
+from typing import Any, Iterable
 
 import altair as alt
 import pandas as pd
@@ -22,7 +29,12 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--events-file",
         default=os.path.join("results", "live_trading", "live_events.jsonl"),
-        help="Path to JSONL events emitted by run_live_trader.py",
+        help="Path to JSONL events emitted by run_live_trader.py (ignored if --events-url is set).",
+    )
+    p.add_argument(
+        "--events-url",
+        default=None,
+        help="HTTP(S) URL to the same JSONL log (for Streamlit Cloud). Overrides --events-file.",
     )
     p.add_argument(
         "--refresh-seconds",
@@ -33,19 +45,27 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
-def _load_events(path: str) -> pd.DataFrame:
-    if not os.path.exists(path):
-        return pd.DataFrame()
+def _parse_jsonl_lines(lines: Iterable[str]) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+    """Parse JSONL; return rows and the last cycle_status object that carries a full window."""
     rows: list[dict[str, Any]] = []
-    with open(path, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                rows.append(json.loads(line))
-            except json.JSONDecodeError:
-                continue
+    last_window: dict[str, Any] | None = None
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            o = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        rows.append(o)
+        if o.get("event_type") == "cycle_status":
+            w = o.get("window_close")
+            if isinstance(w, list) and len(w) > 0:
+                last_window = o
+    return rows, last_window
+
+
+def _dataframe_from_event_rows(rows: list[dict[str, Any]]) -> pd.DataFrame:
     if not rows:
         return pd.DataFrame()
     df = pd.json_normalize(rows)
@@ -54,26 +74,56 @@ def _load_events(path: str) -> pd.DataFrame:
     return df.sort_values("ts_utc", ascending=True).reset_index(drop=True)
 
 
-def _last_cycle_window_from_jsonl(path: str) -> dict[str, Any] | None:
-    """Read raw JSON lines so list fields are not mangled."""
+def _load_events_from_path(path: str) -> tuple[pd.DataFrame, dict[str, Any] | None]:
     if not os.path.exists(path):
+        return pd.DataFrame(), None
+    with open(path, encoding="utf-8") as f:
+        rows, last_window = _parse_jsonl_lines(f)
+    return _dataframe_from_event_rows(rows), last_window
+
+
+def _load_events_from_url(
+    url: str, *, timeout: int = 45
+) -> tuple[pd.DataFrame, dict[str, Any] | None, str | None]:
+    """
+    Returns (dataframe, last_window_object, fetch_error).
+    fetch_error is set when the HTTP request fails (not when the body is empty JSONL).
+    """
+    req = urllib.request.Request(
+        url,
+        headers={"User-Agent": "slds-live-dashboard/1.0"},
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            body = resp.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as e:
+        return pd.DataFrame(), None, f"HTTP {e.code}: {e.reason}"
+    except urllib.error.URLError as e:
+        return pd.DataFrame(), None, str(e.reason if hasattr(e, "reason") else e)
+    except (OSError, ValueError) as e:
+        return pd.DataFrame(), None, str(e)
+    rows, last_window = _parse_jsonl_lines(body.splitlines())
+    return _dataframe_from_event_rows(rows), last_window, None
+
+
+def _secret_events_url() -> str | None:
+    try:
+        s = st.secrets
+        u = s.get("EVENTS_URL") or s.get("events_url")
+        return str(u).strip() if u else None
+    except (FileNotFoundError, RuntimeError, AttributeError, TypeError):
         return None
-    last: dict[str, Any] | None = None
-    with open(path, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                o = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if o.get("event_type") != "cycle_status":
-                continue
-            w = o.get("window_close")
-            if isinstance(w, list) and len(w) > 0:
-                last = o
-    return last
+
+
+def _resolve_events_url(cli_url: str | None) -> str | None:
+    if cli_url and str(cli_url).strip():
+        return str(cli_url).strip()
+    su = _secret_events_url()
+    if su:
+        return su
+    env_u = os.environ.get("EVENTS_URL", "").strip()
+    return env_u or None
 
 
 def _regime_color_scale() -> dict[str, Any]:
@@ -231,10 +281,39 @@ setTimeout(function() {{
         unsafe_allow_html=True,
     )
 
-    st.write(f"Events file: `{args.events_file}`")
-    df = _load_events(args.events_file)
+    events_url = _resolve_events_url(args.events_url)
+    url_fetch_error: str | None = None
+    if events_url:
+        df, raw_last, url_fetch_error = _load_events_from_url(events_url)
+        st.write("Events source: **remote URL** (refreshed each time this page reloads).")
+        st.caption(f"URL: `{events_url}`")
+    else:
+        df, raw_last = _load_events_from_path(args.events_file)
+        st.write(f"Events source: **local file** `{args.events_file}`")
+
     if df.empty:
-        st.warning("No events yet. Start `run_live_trader.py` first.")
+        st.warning("No events loaded yet.")
+        if events_url:
+            if url_fetch_error:
+                st.error(f"Fetch error: {url_fetch_error}")
+                st.caption(
+                    "Check **Settings → Secrets**: `EVENTS_URL` must be https and reachable from "
+                    "Streamlit’s servers (not a URL on your laptop)."
+                )
+            else:
+                st.info(
+                    "The URL responded but contained no parseable JSONL lines (or an empty body). "
+                    "Expected the same JSONL as `run_live_trader.py` writes (one JSON object per line). "
+                    "In **Settings → Secrets**, `EVENTS_URL` must point to a **public** file (no login); "
+                    "private buckets need a signed URL."
+                )
+        else:
+            st.info(
+                "On your laptop: run `run_live_trader.py` so it writes JSONL to the path above. "
+                "On **Streamlit Community Cloud** there is no access to your Mac disk — set "
+                "`EVENTS_URL` in the app’s **Settings → Secrets** to an HTTPS URL that serves "
+                "the same `live_events.jsonl` text (see repo notes or deploy docs)."
+            )
         return
 
     latest = df.iloc[-1].to_dict()
@@ -373,8 +452,7 @@ setTimeout(function() {{
         regime_view = cycle_df[["ts_utc", "latest_regime", "regime_label", "target_weight"]].copy()
         st.dataframe(_newest_first(regime_view, 50), use_container_width=True)
 
-    # Latest window: full path from raw JSONL (lists intact)
-    raw_last = _last_cycle_window_from_jsonl(args.events_file)
+    # Latest window: full path from raw JSONL (lists intact); from same load as df when using URL
     if raw_last:
         _heading_with_info(
             "Latest rolling window — price, colored by inferred regime (per bar)",
