@@ -8,8 +8,11 @@ venv/
 env/
 
 # Local / generated
-results/
+results/**
+!results/live_trading/
+!results/live_trading/live_events.jsonl
 *.jsonl
+!results/live_trading/live_events.jsonl
 .DS_Store
 
 # Secrets — never commit
