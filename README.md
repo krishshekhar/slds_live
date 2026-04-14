@@ -19,7 +19,8 @@ Production-oriented documentation for a **real-data-only** research codebase: **
 9. [Methodology notes](#methodology-notes)
 10. [Limitations & honest caveats](#limitations--honest-caveats)
 11. [Troubleshooting](#troubleshooting)
-12. [References](#references)
+12. [Deploy dashboard (Streamlit Community Cloud)](#deploy-dashboard-streamlit-community-cloud)
+13. [References](#references)
 
 ---
 
@@ -239,6 +240,27 @@ Keep `run_live_trader.py` running in another terminal. The dashboard auto-refres
 - equity/price/target-weight time series
 - recent orders (submitted/skipped)
 - runtime errors and raw event feed
+
+### Deploy dashboard (Streamlit Community Cloud)
+
+[Streamlit Community Cloud](https://streamlit.io/cloud) deploys from a **GitHub** repository, not from your laptop alone. That is why you see: *code is not connected to a remote GitHub repository* until you push.
+
+1. **Create a new empty repository** on GitHub (no README/license if you already have a local repo).
+2. **Add the remote and push** your `main` branch (from this project folder):
+
+```bash
+git remote add origin https://github.com/YOUR_USERNAME/YOUR_REPO.git
+git push -u origin main
+```
+
+3. In **Streamlit Community Cloud**, click **New app**, connect GitHub if asked, pick the repo and branch **`main`**, and set:
+
+   - **Main file path:** `live_dashboard.py`
+   - **Python version:** 3.10+ (match your local env if possible)
+
+4. **Deploy.** The first build installs packages from `requirements.txt`.
+
+**Note:** The hosted dashboard only sees files in the repo. It does **not** receive `results/live_trading/live_events.jsonl` from a trader running on your machine unless you add a backend that writes events somewhere the app can read (object storage, database, etc.). For a live remote view of local runs, keep using `streamlit run` on your computer, or extend the pipeline later.
 
 ### Quick start (safe)
 
