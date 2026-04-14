@@ -515,9 +515,11 @@ setTimeout(function() {{
     if raw_last:
         _heading_with_info(
             "Latest rolling window — price, colored by inferred regime (per bar)",
-            "Each point is one bar inside the model’s lookback window. Colors are bull (green), bear (red), neutral (gray) "
-            "from ranking mean returns of each discrete state on this window only—same rule as the research backtest. "
-            "This is the model’s path over past bars, not a verified future forecast.",
+            "This chart uses only the **most recent** poll: the Gibbs path z over the window and the semantic map "
+            "bear / neutral / bull from that poll (instant window mean ranks, or EMA-smoothed ranks if you run the "
+            "trader with --label-mode smoothed_rank). When a new bar arrives, refit can change z on **older** bars "
+            "and can re-rank state ids, so a bar that looked neutral on an earlier poll can appear bear here—this "
+            "is retrospective consistency from the latest fit, not a frozen label history. Not a forecast.",
             level=3,
         )
         times = raw_last.get("window_bar_times", [])
